@@ -94,4 +94,37 @@ public class RespSerializer {
                 StandardCharsets.UTF_8
         );
     }
+    public byte[] arrayOfBulkStrings(
+            java.util.List<String> values
+    ) {
+
+        java.io.ByteArrayOutputStream output =
+                new java.io.ByteArrayOutputStream();
+
+        try {
+
+            output.write(
+                    (
+                            "*"
+                                    + values.size()
+                                    + "\r\n"
+                    ).getBytes(
+                            java.nio.charset.StandardCharsets.UTF_8
+                    )
+            );
+
+            for (String value : values) {
+
+                output.write(
+                        bulkString(value)
+                );
+            }
+
+        } catch (java.io.IOException e) {
+
+            throw new RuntimeException(e);
+        }
+
+        return output.toByteArray();
+    }
 }

@@ -1,8 +1,10 @@
 package org.example.Server;
 
-
 import org.example.Protocol.RespSerializer;
 import org.example.commond.CommandDispatcher;
+import org.example.config.RedisConfig;
+import org.example.persistence.RdbParser;
+import org.example.replication.ReplicaClient;
 import org.example.storage.RedisStore;
 
 import java.io.IOException;
@@ -13,18 +15,19 @@ import java.util.concurrent.Executors;
 
 public class RedisServer {
 
-    private final int port;
+    private final RedisConfig config;
 
     private final RedisStore redisStore;
 
     private final RespSerializer serializer;
 
     private final CommandDispatcher dispatcher;
+    private ReplicaClient replicaClient;
 
-    public RedisServer(int port) {
+    public RedisServer(RedisConfig config) {
 
-        this.port = port;
-
+        this.config = config;
+this.replicaClient = new ReplicaClient(config);
         this.redisStore =
                 new RedisStore();
 
@@ -34,48 +37,87 @@ public class RedisServer {
         this.dispatcher =
                 new CommandDispatcher(
                         redisStore,
-                        serializer
+                        serializer,
+                        config
+
                 );
     }
 
+
     public void start() {
 
-        ExecutorService executor =
-                Executors.newCachedThreadPool();
+        // Phase 4:
+        // First load dump.rdb into memory
+        loadRdb();
 
-        try (
-                ServerSocket serverSocket =
-                        new ServerSocket(port)
-        ) {
 
+        if(config.isReplica()){
+            Thread replicaThread = new Thread(
+                    replicaClient::connect
+            );
+            replicaThread.setName(
+                    "redis-replication"
+            );
+            replicaThread.start();
+        }
+
+        ExecutorService executorService = Executors.newCachedThreadPool();
+
+        try(ServerSocket socket = new ServerSocket(config.port())){
             System.out.println(
                     "Mini Redis started on port "
-                            + port
+                            + config.port()
             );
 
-            while (true) {
+                while (true) {
 
-                Socket clientSocket =
-                        serverSocket.accept();
+                    Socket client =
+                            socket.accept();
 
-                System.out.println(
-                        "Client connected: "
-                                + clientSocket
-                                .getRemoteSocketAddress()
-                );
 
-                executor.submit(
-                        new ClientHandler(
-                                clientSocket,
-                                dispatcher
-                        )
-                );
-            }
+                    executorService.submit(
+                            new ClientHandler(
+                                    client,
+                                    dispatcher
+                            )
+                    );
+                }
+
+        }catch (IOException e){
+
+        }
+
+    }
+
+
+    private void loadRdb() {
+
+        RdbParser parser =
+                new RdbParser();
+
+
+        try {
+
+            System.out.println(
+                    "Loading RDB from: "
+                            + config.rdbPath()
+            );
+
+
+            parser.load(
+                    config.rdbPath(),
+                    redisStore
+            );
+
+
+            System.out.println(
+                    "RDB loading completed."
+            );
 
         } catch (IOException e) {
 
             throw new RuntimeException(
-                    "Unable to start Redis server",
+                    "Unable to load RDB file",
                     e
             );
         }

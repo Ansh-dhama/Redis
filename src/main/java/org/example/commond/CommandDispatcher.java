@@ -1,8 +1,10 @@
 package org.example.commond;
 
 import org.example.Protocol.RespSerializer;
+import org.example.config.RedisConfig;
+import org.example.persistence.RdbWriter;
 import org.example.storage.RedisStore;
-import org.example.commond.GetCommand;
+
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -14,22 +16,31 @@ public class CommandDispatcher {
 
     private final RespSerializer serializer;
 
+
     public CommandDispatcher(
             RedisStore redisStore,
-            RespSerializer serializer
+            RespSerializer serializer,
+            RedisConfig config
     ) {
 
         this.serializer = serializer;
 
+
         commands.put(
                 "PING",
-                new PingCommand(serializer)
+                new PingCommand(
+                        serializer
+                )
         );
+
 
         commands.put(
                 "ECHO",
-                new EchoCommand(serializer)
+                new EchoCommand(
+                        serializer
+                )
         );
+
 
         commands.put(
                 "SET",
@@ -39,6 +50,7 @@ public class CommandDispatcher {
                 )
         );
 
+
         commands.put(
                 "GET",
                 new GetCommand(
@@ -46,7 +58,26 @@ public class CommandDispatcher {
                         serializer
                 )
         );
+
+
+        // NEW
+        commands.put(
+                "SAVE",
+                new SaveCommand(
+                        redisStore,
+                        new RdbWriter(),
+                        config.rdbPath(),
+                        serializer
+                )
+        );
+        commands.put(
+                "REPLCONF",
+                new ReplConfCommand(
+                        serializer
+                )
+        );
     }
+
 
     public byte[] dispatch(
             List<String> request
@@ -60,12 +91,17 @@ public class CommandDispatcher {
             );
         }
 
+
         String commandName =
                 request.get(0)
                         .toUpperCase();
 
+
         Command command =
-                commands.get(commandName);
+                commands.get(
+                        commandName
+                );
+
 
         if (command == null) {
 
@@ -76,12 +112,16 @@ public class CommandDispatcher {
             );
         }
 
+
         List<String> args =
                 request.subList(
                         1,
                         request.size()
                 );
 
-        return command.execute(args);
+
+        return command.execute(
+                args
+        );
     }
 }
