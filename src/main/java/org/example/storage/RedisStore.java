@@ -154,4 +154,7 @@ public class RedisStore {
 
         return keys;
     }
+    public void clear() {
+        data.clear();
+    }
 }

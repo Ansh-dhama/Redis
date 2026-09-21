@@ -3,6 +3,9 @@ package org.example.commond;
 import org.example.Protocol.RespSerializer;
 import org.example.config.RedisConfig;
 import org.example.persistence.RdbWriter;
+import org.example.replication.InfoCommand;
+import org.example.replication.ReplicationManager;
+import org.example.replication.WaitCommand;
 import org.example.storage.RedisStore;
 
 import java.util.HashMap;
@@ -20,65 +23,82 @@ public class CommandDispatcher {
     public CommandDispatcher(
             RedisStore redisStore,
             RespSerializer serializer,
-            RedisConfig config
+            RedisConfig config,
+            ReplicationManager replicationManager
     ) {
+        {
 
-        this.serializer = serializer;
-
-
-        commands.put(
-                "PING",
-                new PingCommand(
-                        serializer
-                )
-        );
+            this.serializer = serializer;
 
 
-        commands.put(
-                "ECHO",
-                new EchoCommand(
-                        serializer
-                )
-        );
+            commands.put(
+                    "PING",
+                    new PingCommand(
+                            serializer
+                    )
+            );
 
 
-        commands.put(
-                "SET",
-                new SetCommand(
-                        redisStore,
-                        serializer
-                )
-        );
+            commands.put(
+                    "ECHO",
+                    new EchoCommand(
+                            serializer
+                    )
+            );
 
 
-        commands.put(
-                "GET",
-                new GetCommand(
-                        redisStore,
-                        serializer
-                )
-        );
+            commands.put(
+                    "SET",
+                    new SetCommand(
+                            redisStore,
+                            serializer
+                    )
+            );
 
 
-        // NEW
-        commands.put(
-                "SAVE",
-                new SaveCommand(
-                        redisStore,
-                        new RdbWriter(),
-                        config.rdbPath(),
-                        serializer
-                )
-        );
-        commands.put(
-                "REPLCONF",
-                new ReplConfCommand(
-                        serializer
-                )
-        );
+            commands.put(
+                    "GET",
+                    new GetCommand(
+                            redisStore,
+                            serializer
+                    )
+            );
+            commands.put(
+                    "INFO",
+                    new InfoCommand(
+                            serializer,
+                            config,
+                            replicationManager
+                    )
+            );
+
+            commands.put(
+                    "WAIT",
+                    new WaitCommand(
+                            serializer,
+                            config,
+                            replicationManager
+                    )
+            );
+            // NEW
+            commands.put(
+                    "SAVE",
+                    new SaveCommand(
+                            redisStore,
+                            new RdbWriter(),
+                            config.rdbPath(),
+                            serializer
+                    )
+            );
+            commands.put(
+                    "REPLCONF",
+                    new ReplConfCommand(
+                            serializer
+                    )
+            );
+        }
+
     }
-
-
     public byte[] dispatch(
             List<String> request
     ) {

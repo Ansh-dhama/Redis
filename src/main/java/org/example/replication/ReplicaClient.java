@@ -1,25 +1,61 @@
 package org.example.replication;
 
+import org.example.Protocol.RespParser;
+import org.example.commond.CommandDispatcher;
 import org.example.config.RedisConfig;
+import org.example.persistence.RdbParser;
+import org.example.storage.RedisStore;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+
 import java.net.InetSocketAddress;
 import java.net.Socket;
-import java.nio.charset.StandardCharsets;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import org.example.commond.RespCommandEncoder;
+import java.util.List;
 
 public class ReplicaClient {
 
     private final RedisConfig config;
 
+    private final CommandDispatcher dispatcher;
+
+    private final RedisStore redisStore;
+
+
     private Socket socket;
+
     private InputStream input;
+
     private OutputStream output;
 
 
-    public ReplicaClient(RedisConfig config) {
-        this.config = config;
+    private long replicationOffset =
+            0;
+
+
+    private final RespParser parser =
+            new RespParser();
+
+
+    public ReplicaClient(
+            RedisConfig config,
+            CommandDispatcher dispatcher,
+            RedisStore redisStore
+    ) {
+
+        this.config =
+                config;
+
+        this.dispatcher =
+                dispatcher;
+
+        this.redisStore =
+                redisStore;
     }
 
 
@@ -27,8 +63,9 @@ public class ReplicaClient {
 
         try {
 
-            // Connect replica -> master
-            socket = new Socket();
+            socket =
+                    new Socket();
+
 
             socket.connect(
                     new InetSocketAddress(
@@ -37,8 +74,13 @@ public class ReplicaClient {
                     )
             );
 
-            input = socket.getInputStream();
-            output = socket.getOutputStream();
+
+            input =
+                    socket.getInputStream();
+
+            output =
+                    socket.getOutputStream();
+
 
             System.out.println(
                     "Connected to master "
@@ -48,28 +90,37 @@ public class ReplicaClient {
             );
 
 
-            // STEP 1: PING
-            sendCommand("PING");
+            /*
+             * STEP 1
+             */
+            sendCommand(
+                    "PING"
+            );
 
             System.out.println(
-                    "PING -> " + readLine()
+                    readLine()
             );
 
 
-            // STEP 2: Tell master replica port
+            /*
+             * STEP 2
+             */
             sendCommand(
                     "REPLCONF",
                     "listening-port",
-                    String.valueOf(config.port())
+                    String.valueOf(
+                            config.port()
+                    )
             );
 
             System.out.println(
-                    "REPLCONF port -> "
-                            + readLine()
+                    readLine()
             );
 
 
-            // STEP 3: Tell master capability
+            /*
+             * STEP 3
+             */
             sendCommand(
                     "REPLCONF",
                     "capa",
@@ -77,76 +128,246 @@ public class ReplicaClient {
             );
 
             System.out.println(
-                    "REPLCONF capa -> "
-                            + readLine()
+                    readLine()
             );
 
 
-        } catch (IOException e) {
+            /*
+             * STEP 4
+             *
+             * We are new.
+             * Request FULL sync.
+             */
+            sendCommand(
+                    "PSYNC",
+                    "?",
+                    "-1"
+            );
+
+
+            /*
+             * +FULLRESYNC id offset
+             */
+            String fullResync =
+                    readLine();
+
 
             System.out.println(
-                    "Unable to connect to master: "
+                    fullResync
+            );
+
+
+            parseFullResync(
+                    fullResync
+            );
+
+
+            /*
+             * Receive RDB.
+             */
+            receiveRdb();
+
+
+            /*
+             * From this point:
+             *
+             * keep reading master's commands.
+             */
+            replicationLoop();
+
+
+        } catch (Exception e) {
+
+            System.out.println(
+                    "Replication error: "
                             + e.getMessage()
             );
         }
     }
 
 
-    /*
-     * Convert Java command into RESP
-     *
-     * sendCommand("PING")
-     *
-     * becomes:
-     *
-     * *1
-     * $4
-     * PING
-     */
+    private void parseFullResync(
+            String response
+    ) throws IOException {
+
+        if (!response.startsWith(
+                "+FULLRESYNC"
+        )) {
+
+            throw new IOException(
+                    "Expected FULLRESYNC but received "
+                            + response
+            );
+        }
+
+
+        String[] parts =
+                response.split(" ");
+
+
+        replicationOffset =
+                Long.parseLong(
+                        parts[2]
+                );
+    }
+
+
+    private void receiveRdb()
+            throws IOException {
+
+        /*
+         * Example:
+         *
+         * $119
+         */
+        String rdbHeader =
+                readLine();
+
+
+        if (!rdbHeader.startsWith("$")) {
+
+            throw new IOException(
+                    "Expected RDB bulk length"
+            );
+        }
+
+
+        int rdbLength =
+                Integer.parseInt(
+                        rdbHeader.substring(1)
+                );
+
+
+        byte[] rdbBytes =
+                input.readNBytes(
+                        rdbLength
+                );
+
+
+        if (
+                rdbBytes.length
+                        != rdbLength
+        ) {
+
+            throw new IOException(
+                    "Incomplete RDB received"
+            );
+        }
+
+
+        Path path =
+                config.rdbPath();
+
+
+        Path parent =
+                path.getParent();
+
+
+        if (parent != null) {
+
+            Files.createDirectories(
+                    parent
+            );
+        }
+
+
+        Files.write(
+                path,
+                rdbBytes
+        );
+
+
+        /*
+         * FULL sync replaces local data.
+         */
+        redisStore.clear();
+
+
+        new RdbParser()
+                .load(
+                        path,
+                        redisStore
+                );
+
+
+        System.out.println(
+                "Replica loaded master RDB"
+        );
+    }
+
+
+    private void replicationLoop() throws IOException {
+
+        while (true) {
+
+            List<String> command = parser.parse(input);
+
+            if (command == null || command.isEmpty()) {
+                break;
+            }
+
+            int commandBytes =
+                    RespCommandEncoder.encode(command).length;
+
+            // Master asks for replica's processed offset
+            if (isGetAck(command)) {
+
+                sendCommand(
+                        "REPLCONF",
+                        "ACK",
+                        String.valueOf(replicationOffset)
+                );
+
+                replicationOffset += commandBytes;
+                continue;
+            }
+
+            // Apply replicated SET to replica's RedisStore
+            dispatcher.dispatch(command);
+
+            replicationOffset += commandBytes;
+
+            System.out.println("Replica applied: " + command);
+        }
+    }
+
+
+    private boolean isGetAck(
+            List<String> command
+    ) {
+
+        return command.size() >= 3
+
+                && command.get(0)
+                .equalsIgnoreCase(
+                        "REPLCONF"
+                )
+
+                && command.get(1)
+                .equalsIgnoreCase(
+                        "GETACK"
+                );
+    }
+
+
     private void sendCommand(
             String... parts
     ) throws IOException {
 
-        StringBuilder command =
-                new StringBuilder();
-
-        command.append("*")
-                .append(parts.length)
-                .append("\r\n");
-
-
-        for (String part : parts) {
-
-            byte[] bytes =
-                    part.getBytes(
-                            StandardCharsets.UTF_8
-                    );
-
-            command.append("$")
-                    .append(bytes.length)
-                    .append("\r\n")
-                    .append(part)
-                    .append("\r\n");
-        }
+        byte[] command =
+                RespCommandEncoder.encode(
+                        parts
+                );
 
 
         output.write(
-                command.toString()
-                        .getBytes(
-                                StandardCharsets.UTF_8
-                        )
+                command
         );
 
         output.flush();
     }
 
 
-    /*
-     * Read RESP simple response:
-     *
-     * +PONG\r\n
-     * +OK\r\n
-     */
     private String readLine()
             throws IOException {
 
@@ -173,12 +394,20 @@ public class ReplicaClient {
                 int next =
                         input.read();
 
+
                 if (next == '\n') {
+
                     break;
                 }
 
-                line.append((char) current);
-                line.append((char) next);
+
+                line.append(
+                        (char) current
+                );
+
+                line.append(
+                        (char) next
+                );
 
             } else {
 

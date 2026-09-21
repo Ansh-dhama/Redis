@@ -127,4 +127,8 @@ public class RespSerializer {
 
         return output.toByteArray();
     }
+    public byte[] integer(long value) {
+        return (":" + value + "\r\n")
+                .getBytes(StandardCharsets.UTF_8);
+    }
 }
