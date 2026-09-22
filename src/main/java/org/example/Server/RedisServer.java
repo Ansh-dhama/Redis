@@ -1,6 +1,7 @@
 package org.example.Server;
 
 import org.example.Protocol.RespSerializer;
+import org.example.Stream.StreamSnapshotFile;
 import org.example.commond.CommandDispatcher;
 import org.example.config.RedisConfig;
 import org.example.persistence.RdbParser;
@@ -145,11 +146,10 @@ public class RedisServer {
             );
 
 
-            parser.load(
+            new StreamSnapshotFile().load(
                     config.rdbPath(),
-                    redisStore
+                    dispatcher.getStreamStore()
             );
-
 
             System.out.println(
                     "RDB loading completed."

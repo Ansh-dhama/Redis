@@ -13,6 +13,7 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.example.commond.RespCommandEncoder;
@@ -167,14 +168,9 @@ public class ReplicaClient {
              */
             receiveRdb();
 
+            receiveStreams();
 
-            /*
-             * From this point:
-             *
-             * keep reading master's commands.
-             */
             replicationLoop();
-
 
         } catch (Exception e) {
 
@@ -419,5 +415,52 @@ public class ReplicaClient {
 
 
         return line.toString();
+    }private void receiveStreams() throws IOException {
+
+        String header = readLine();
+
+        if (!header.startsWith("+STREAMSYNC ")) {
+
+            throw new IOException(
+                    "Expected STREAMSYNC, received: " + header
+            );
+        }
+
+        int count = Integer.parseInt(
+                header.substring("+STREAMSYNC ".length())
+        );
+
+        // Full synchronization replaces old stream data.
+        dispatcher.getStreamStore().clear();
+
+        for (int i = 0; i < count; i++) {
+
+            List<String> command = parser.parse(input);
+
+            if (command == null ||
+                    command.isEmpty() ||
+                    !command.get(0).equalsIgnoreCase("XADD")) {
+
+                throw new IOException(
+                        "Invalid stream synchronization entry"
+                );
+            }
+
+            byte[] result = dispatcher.dispatch(command);
+
+            if (result.length == 0 || result[0] == '-') {
+
+                throw new IOException(
+                        "Failed to restore stream entry: "
+                                + command
+                                + " | Error: "
+                                + new String(result, StandardCharsets.UTF_8)
+                );
+            }
+        }
+
+        System.out.println(
+                "Replica synchronized " + count + " stream entries"
+        );
     }
 }
